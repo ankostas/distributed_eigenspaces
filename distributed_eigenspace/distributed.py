@@ -3,6 +3,14 @@
 import pika
 
 
+def run_master():
+    pass
+
+
+def run_slave():
+    pass
+
+
 def main():
     pass
 
