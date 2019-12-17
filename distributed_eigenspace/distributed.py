@@ -17,7 +17,7 @@ class Node:
 class SlaveNode(Node):
     def __init__(self, broker_host):
         super().__init__(broker_host)
-        self.channel.basic_consume(queue='hello', on_message_callback=self.callback_)
+        self.channel.basic_consume(queue='slaves', on_message_callback=self.callback_)
 
     def start(self):
         self.channel.start_consuming()
