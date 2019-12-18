@@ -41,7 +41,7 @@ class SlaveNode(Node):
     def callback_(self, channel, method, properties, body):
         request = json.loads(body)
         print("Slave: Received, batchid: " + str(request["batchId"]))
-        print(request["batch"])
+        #print(request["batch"])
         batch = np.array(request["batch"])
         eigenspace = self.compute_sigma_hat_(batch)
         eigenspace = self.top_k_eigenvectors(eigenspace, request["rank"])
@@ -61,10 +61,10 @@ class SlaveNode(Node):
         params: x: batch of the data
         return: segma hat
         """
-        # the K leading eigenvectors of Σ = 1/n * sum{X @ X.T} over n
+        # the K leading eigenvectors of simga = 1/n * sum{X @ X.T} over n
         n, d = x.shape
         sigma_hat = np.zeros((d, d))
-        sigma_hat += np.dot(x, x.T)
+        sigma_hat += np.dot(x.T, x)
         sigma_hat /= n
         return sigma_hat
 
@@ -87,6 +87,7 @@ class MasterNode(Node):
         self.batches_in_process = set()
         self.batches = list()
         self.computed_eigens = list()
+        self.current_batch = 0
         print("Master Start listening")
         self.channel.basic_consume(queue='master', on_message_callback=self.callback_)
 
@@ -100,12 +101,18 @@ class MasterNode(Node):
 
         # Send batches to queue
         print("Sending to slaves...")
-        for i, batch in enumerate(self.batches):
+        request = dict()
+        request["batchId"] = 0
+        request["rank"] = self.rank
+        request["batch"] = self.batches[0].tolist()
+        self.current_batch += 1
+        self.send_to_slaves_(str(json.dumps(request)))
+        """for i, batch in enumerate(self.batches):
             request = dict()
             request["batchId"] = i
             request["rank"] = self.rank
             request["batch"] = batch.tolist()
-            self.send_to_slaves_(str(json.dumps(request)))
+            self.send_to_slaves_(str(json.dumps(request)))"""
 
         print("Start waiting for messages")
         self.channel.start_consuming()
@@ -118,12 +125,21 @@ class MasterNode(Node):
         eigenspace = np.array(request["eigenspace"])
         self.computed_eigens.append(eigenspace)
         self.batches_in_process.remove(batch_id)
+
         if len(self.batches_in_process) == 0:
             sigma_tilde = np.zeros((self.computed_eigens[0].shape[0], self.computed_eigens[0].shape[0]))
             for eigen in self.computed_eigens:
                 sigma_tilde += eigen @ eigen.T
             sigma_tilde /= self.batches_number
             print("Computed!")
+        else:
+            request = dict()
+            self.current_batch += 1
+            request["batchId"] = self.current_batch
+            request["batch"] = self.batches.pop().tolist()
+            request["rank"] = self.rank
+            self.send_to_slaves_(str(json.dumps(request)))
+            print("Sended batch: " + str(request["batchId"]))
 
         channel.basic_ack(delivery_tag=method.delivery_tag)
 
@@ -164,7 +180,7 @@ def main():
     if args.mode == "slave":
         run_slave(args.broker)
     elif args.mode == "master":
-        run_master(args.broker, args.rank, args.batches, args.data)
+        run_master(args.broker, int(args.rank), int(args.batches), args.data)
     else:
         raise RuntimeError("Mode not specified or specified wrong")
 
