@@ -106,10 +106,11 @@ class MasterNode(Node):
 
         # Send batches to queue
         print("Sending to slaves...")
-        request = dict()
-        request["rank"] = self.rank
-        request["batch"] = self.batches.pop()
-        self.send_to_slaves_(str(json.dumps(request)))
+        for i in range(0, 5):
+            request = dict()
+            request["rank"] = self.rank
+            request["batch"] = self.batches.pop()
+            self.send_to_slaves_(str(json.dumps(request)))
 
         print("Start waiting for messages")
         self.channel.start_consuming()
