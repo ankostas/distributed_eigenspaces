@@ -3,6 +3,7 @@
 import pika
 import json
 import argparse
+import time
 import numpy as np
 
 from load_data import load_CIFAR_10_data
@@ -90,6 +91,7 @@ class MasterNode(Node):
         self.computed_eigens = list()
         self.current_batch = 0
         print("Master Start listening")
+        self.start_time = time.time()
         self.channel.basic_consume(queue='master', on_message_callback=self.callback_)
 
     def start(self):
@@ -126,7 +128,7 @@ class MasterNode(Node):
             for eigen in self.computed_eigens:
                 sigma_tilde += eigen @ eigen.T
             sigma_tilde /= self.batches_number
-            print("Computed!")
+            print("Computed! Time (seconds): " + str(time.time() - self.start_time))
         else:
             request = dict()
             request["batch"] = self.batches.pop()
