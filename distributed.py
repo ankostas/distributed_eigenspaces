@@ -30,9 +30,10 @@ class Node:
 
 
 class SlaveNode(Node):
-    def __init__(self, broker_host):
+    def __init__(self, broker_host, data):
         super().__init__(broker_host)
         print("Slave Start listening")
+        self.data = data
         self.channel.basic_consume(queue='slaves', on_message_callback=self.callback_)
 
     def start(self):
@@ -40,13 +41,13 @@ class SlaveNode(Node):
 
     def callback_(self, channel, method, properties, body):
         request = json.loads(body)
-        print("Slave: Received, batchid: " + str(request["batchId"]))
-        #print(request["batch"])
-        batch = np.array(request["batch"])
+        print("Slave: Received, batchid: " + str(request["batch"]))
+
+        batch = self.data[request["batch"][0]:request["batch"][1]]
         eigenspace = self.compute_sigma_hat_(batch)
         eigenspace = self.top_k_eigenvectors(eigenspace, request["rank"])
         response = dict()
-        response["batchId"] = request["batchId"]
+        response["batch"] = request["batch"]
         response["eigenspace"] = eigenspace.tolist()
         self.send_to_master_(str(json.dumps(response)))
         channel.basic_ack(delivery_tag=method.delivery_tag)
@@ -96,35 +97,29 @@ class MasterNode(Node):
         print("Splitting dataset...")
         step = self.data.shape[0] // self.batches_number
         for i in range(self.batches_number):
-            self.batches.append(self.data[i*step:(i+1)*step])
-            self.batches_in_process.add(i)
+            batch = (i * step, (i + 1) * step)
+            self.batches.append(batch)
+            #self.batches.append(self.data[i*step:(i+1)*step])
+            self.batches_in_process.add(batch)
 
         # Send batches to queue
         print("Sending to slaves...")
         request = dict()
-        request["batchId"] = 0
         request["rank"] = self.rank
-        request["batch"] = self.batches[0].tolist()
-        self.current_batch += 1
+        request["batch"] = self.batches.pop()
         self.send_to_slaves_(str(json.dumps(request)))
-        """for i, batch in enumerate(self.batches):
-            request = dict()
-            request["batchId"] = i
-            request["rank"] = self.rank
-            request["batch"] = batch.tolist()
-            self.send_to_slaves_(str(json.dumps(request)))"""
 
         print("Start waiting for messages")
         self.channel.start_consuming()
 
     def callback_(self, channel, method, properties, body):
         request = json.loads(body)
-        print("Master: Received, batchid: " + str(request["batchId"]))
+        batch = (request["batch"][0], request["batch"][1])
+        print("Master: Received, batch: " + str(batch))
 
-        batch_id = request["batchId"]
         eigenspace = np.array(request["eigenspace"])
         self.computed_eigens.append(eigenspace)
-        self.batches_in_process.remove(batch_id)
+        self.batches_in_process.remove(batch)
 
         if len(self.batches_in_process) == 0:
             sigma_tilde = np.zeros((self.computed_eigens[0].shape[0], self.computed_eigens[0].shape[0]))
@@ -134,12 +129,10 @@ class MasterNode(Node):
             print("Computed!")
         else:
             request = dict()
-            self.current_batch += 1
-            request["batchId"] = self.current_batch
-            request["batch"] = self.batches.pop().tolist()
+            request["batch"] = self.batches.pop()
             request["rank"] = self.rank
             self.send_to_slaves_(str(json.dumps(request)))
-            print("Sended batch: " + str(request["batchId"]))
+            print("Sended batch: " + str(request["batch"]))
 
         channel.basic_ack(delivery_tag=method.delivery_tag)
 
@@ -148,19 +141,13 @@ class MasterNode(Node):
         self.channel.basic_publish(exchange='', routing_key='slaves', body=message)
 
 
-def run_master(broker, rank, batches_number, data_dir):
-    data, filenames, labels = load_CIFAR_10_data(data_dir)
-    # Remove RGB Channales and make dataset single scale
-    data = data.mean(axis=3)
-    # Reshape images to be in R(1024) instead of R(32x32)
-    data = data.reshape(data.shape[:-2] + (-1,))
-
+def run_master(broker, rank, batches_number, data):
     master = MasterNode(broker, rank, batches_number, data)
     master.start()
 
 
-def run_slave(broker):
-    slave = SlaveNode(broker)
+def run_slave(broker, data):
+    slave = SlaveNode(broker, data)
     slave.start()
 
 
@@ -177,10 +164,16 @@ def main():
     if args.broker is None:
         raise RuntimeError("Broker not specified")
 
+    data, filenames, labels = load_CIFAR_10_data(args.data)
+    # Remove RGB Channales and make dataset single scale
+    data = data.mean(axis=3)
+    # Reshape images to be in R(1024) instead of R(32x32)
+    data = data.reshape(data.shape[:-2] + (-1,))
+
     if args.mode == "slave":
-        run_slave(args.broker)
+        run_slave(args.broker, data)
     elif args.mode == "master":
-        run_master(args.broker, int(args.rank), int(args.batches), args.data)
+        run_master(args.broker, int(args.rank), int(args.batches), data)
     else:
         raise RuntimeError("Mode not specified or specified wrong")
 
